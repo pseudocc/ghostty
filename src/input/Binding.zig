@@ -559,6 +559,7 @@ pub const Action = union(enum) {
     pub const WriteScreenAction = enum {
         paste,
         open,
+        pager,
     };
 
     // Extern because it is used in the embedded runtime ABI.

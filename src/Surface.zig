@@ -255,6 +255,7 @@ const DerivedConfig = struct {
     title: ?[:0]const u8,
     title_report: bool,
     links: []Link,
+    pager_scheme: ?[:0]const u8,
 
     const Link = struct {
         regex: oni.Regex,
@@ -316,6 +317,7 @@ const DerivedConfig = struct {
             .title = config.title,
             .title_report = config.@"title-report",
             .links = links,
+            .pager_scheme = config.@"pager-scheme",
 
             // Assignments happen sequentially so we have to do this last
             // so that the memory is captured from allocs above.
@@ -4353,8 +4355,10 @@ fn writeScreenFile(
     try buf_writer.flush();
 
     // Get the final path
-    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const path = try tmp_dir.dir.realpath(filename, &path_buf);
+    const SCHEME_MAX_LEN = 32;
+    var url_buf: [SCHEME_MAX_LEN + std.fs.max_path_bytes]u8 = undefined;
+    const path_buf: []u8 = url_buf[SCHEME_MAX_LEN..];
+    const path = try tmp_dir.dir.realpath(filename, path_buf);
 
     switch (write_action) {
         .open => try internal_os.open(self.alloc, .text, path),
@@ -4362,6 +4366,22 @@ fn writeScreenFile(
             self.alloc,
             path,
         ), .unlocked),
+        .pager => {
+            if (self.config.pager_scheme) |scheme| {
+                if (scheme.len > SCHEME_MAX_LEN) {
+                    log.err("pager scheme too long", .{});
+                    return;
+                }
+                const offset = SCHEME_MAX_LEN - scheme.len;
+                const scheme_buf = url_buf[offset..SCHEME_MAX_LEN];
+                @memcpy(scheme_buf, scheme);
+                const url = url_buf[offset .. SCHEME_MAX_LEN + path.len];
+                try internal_os.open(self.alloc, .text, url);
+            } else {
+                log.err("pager scheme not set", .{});
+                return;
+            }
+        },
     }
 }
 

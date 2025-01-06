@@ -2124,6 +2124,16 @@ term: []const u8 = "xterm-ghostty",
 /// This only works on macOS since only macOS has an auto-update feature.
 @"auto-update-channel": ?build_config.ReleaseChannel = null,
 
+/// The URL scheme to use for opening the temporary file created by the
+/// `Binding.Action.WriteScreenAction`, this option will only take effect
+/// when the action is `open` and will be used to construct the URL to
+/// open the file.
+///
+/// Under the hood:
+///  * `null`: internal_os.open(file)
+///  * `scheme`: inernal_os.open(${scheme}://${file})
+@"pager-scheme": ?[:0]const u8 = null,
+
 /// This is set by the CLI parser for deinit.
 _arena: ?ArenaAllocator = null,
 
