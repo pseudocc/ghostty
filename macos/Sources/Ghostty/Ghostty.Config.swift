@@ -132,15 +132,6 @@ extension Ghostty {
             return v
         }
 
-        var windowColorspace: String {
-            guard let config = self.config else { return "" }
-            var v: UnsafePointer<Int8>? = nil
-            let key = "window-colorspace"
-            guard ghostty_config_get(config, &v, key, UInt(key.count)) else { return "" }
-            guard let ptr = v else { return "" }
-            return String(cString: ptr)
-        }
-
         var windowSaveState: String {
             guard let config = self.config else { return "" }
             var v: UnsafePointer<Int8>? = nil
@@ -430,6 +421,16 @@ extension Ghostty {
             let key = "quick-terminal-autohide"
             _ = ghostty_config_get(config, &v, key, UInt(key.count))
             return v
+        }
+
+        var quickTerminalSpaceBehavior: QuickTerminalSpaceBehavior {
+            guard let config = self.config else { return .move }
+            var v: UnsafePointer<Int8>? = nil
+            let key = "quick-terminal-space-behavior"
+            guard ghostty_config_get(config, &v, key, UInt(key.count)) else { return .move }
+            guard let ptr = v else { return .move }
+            let str = String(cString: ptr)
+            return QuickTerminalSpaceBehavior(fromGhosttyConfig: str) ?? .move
         }
         #endif
 

@@ -32,7 +32,7 @@ const url = @import("url.zig");
 const Key = @import("key.zig").Key;
 const KeyValue = @import("key.zig").Value;
 const ErrorList = @import("ErrorList.zig");
-const MetricModifier = fontpkg.face.Metrics.Modifier;
+const MetricModifier = fontpkg.Metrics.Modifier;
 const help_strings = @import("help_strings");
 
 const log = std.log.scoped(.config);
@@ -247,6 +247,32 @@ const c = @cImport({
 ///
 /// This is currently only supported on macOS.
 @"font-thicken-strength": u8 = 255,
+
+/// What color space to use when performing alpha blending.
+///
+/// This affects how text looks for different background/foreground color pairs.
+///
+/// Valid values:
+///
+/// * `native` - Perform alpha blending in the native color space for the OS.
+///   On macOS this corresponds to Display P3, and on Linux it's sRGB.
+///
+/// * `linear` - Perform alpha blending in linear space. This will eliminate
+///   the darkening artifacts around the edges of text that are very visible
+///   when certain color combinations are used (e.g. red / green), but makes
+///   dark text look much thinner than normal and light text much thicker.
+///   This is also sometimes known as "gamma correction".
+///   (Currently only supported on macOS. Has no effect on Linux.)
+///
+/// * `linear-corrected` - Corrects the thinning/thickening effect of linear
+///   by applying a correction curve to the text alpha depending on its
+///   brightness. This compensates for the thinning and makes the weight of
+///   most text appear very similar to when it's blended non-linearly.
+///
+/// Note: This setting affects more than just text, images will also be blended
+/// in the selected color space, and custom shaders will receive colors in that
+/// color space as well.
+@"text-blending": TextBlending = .native,
 
 /// All of the configurations behavior adjust various metrics determined by the
 /// font. The values can be integers (1, -1, etc.) or a percentage (20%, -15%,
@@ -604,7 +630,7 @@ palette: Palette = .{},
 ///
 /// Supported on macOS and on some Linux desktop environments, including:
 ///
-///   * KDE Plasma (Wayland only)
+///   * KDE Plasma (Wayland and X11)
 ///
 /// Warning: the exact blur intensity is _ignored_ under KDE Plasma, and setting
 /// this setting to either `true` or any positive blur intensity value would
@@ -764,6 +790,11 @@ link: RepeatableLink = .{},
 /// `link`). If you want to customize URL matching, use `link` and disable this.
 @"link-url": bool = true,
 
+/// Whether to start the window in a maximized state. This setting applies
+/// to new windows and does not apply to tabs, splits, etc. However, this setting
+/// will apply to all new windows, not just the first one.
+maximize: bool = false,
+
 /// Start new windows in fullscreen. This setting applies to new windows and
 /// does not apply to tabs, splits, etc. However, this setting will apply to all
 /// new windows, not just the first one.
@@ -914,7 +945,9 @@ class: ?[:0]const u8 = null,
 ///
 ///   * `unbind` - Remove the binding. This makes it so the previous action
 ///     is removed, and the key will be sent through to the child command
-///     if it is printable.
+///     if it is printable. Unbind will remove any matching trigger,
+///     including `physical:`-prefixed triggers without specifying the
+///     prefix.
 ///
 ///   * `csi:text` - Send a CSI sequence. i.e. `csi:A` sends "cursor up".
 ///
@@ -1117,6 +1150,15 @@ keybind: Keybinds = .{},
 /// Note: any font available on the system may be used, this font is not
 /// required to be a fixed-width font.
 @"window-title-font-family": ?[:0]const u8 = null,
+
+/// The text that will be displayed in the subtitle of the window. Valid values:
+///
+///   * `false` - Disable the subtitle.
+///   * `working-directory` - Set the subtitle to the working directory of the
+///      surface.
+///
+/// This feature is only supported on GTK with Adwaita enabled.
+@"window-subtitle": WindowSubtitle = .false,
 
 /// The theme to use for the windows. Valid values:
 ///
@@ -1376,24 +1418,19 @@ keybind: Keybinds = .{},
 @"image-storage-limit": u32 = 320 * 1000 * 1000,
 
 /// Whether to automatically copy selected text to the clipboard. `true`
-/// will prefer to copy to the selection clipboard if supported by the
-/// OS, otherwise it will copy to the system clipboard.
+/// will prefer to copy to the selection clipboard, otherwise it will copy to
+/// the system clipboard.
 ///
 /// The value `clipboard` will always copy text to the selection clipboard
-/// (for supported systems) as well as the system clipboard. This is sometimes
-/// a preferred behavior on Linux.
+/// as well as the system clipboard.
 ///
-/// Middle-click paste will always use the selection clipboard on Linux
-/// and the system clipboard on macOS. Middle-click paste is always enabled
-/// even if this is `false`.
+/// Middle-click paste will always use the selection clipboard. Middle-click
+/// paste is always enabled even if this is `false`.
 ///
-/// The default value is true on Linux and false on macOS. macOS copy on
-/// select behavior is not typical for applications so it is disabled by
-/// default. On Linux, this is a standard behavior so it is enabled by
-/// default.
+/// The default value is true on Linux and macOS.
 @"copy-on-select": CopyOnSelect = switch (builtin.os.tag) {
     .linux => .true,
-    .macos => .false,
+    .macos => .true,
     else => .false,
 },
 
@@ -1558,6 +1595,23 @@ keybind: Keybinds = .{},
 /// Automatically hide the quick terminal when focus shifts to another window.
 /// Set it to false for the quick terminal to remain open even when it loses focus.
 @"quick-terminal-autohide": bool = true,
+
+/// This configuration option determines the behavior of the quick terminal
+/// when switching between macOS spaces. macOS spaces are virtual desktops
+/// that can be manually created or are automatically created when an
+/// application is in full-screen mode.
+///
+/// Valid values are:
+///
+///  * `move` - When switching to another space, the quick terminal will
+///    also moved to the current space.
+///
+///  * `remain` - The quick terminal will stay only in the space where it
+///    was originally opened and will not follow when switching to another
+///    space.
+///
+/// The default value is `move`.
+@"quick-terminal-space-behavior": QuickTerminalSpaceBehavior = .move,
 
 /// Whether to enable shell integration auto-injection or not. Shell integration
 /// greatly enhances the terminal experience by enabling a number of features:
@@ -1952,6 +2006,18 @@ keybind: Keybinds = .{},
 /// must always be able to move themselves into an isolated cgroup.
 @"linux-cgroup-hard-fail": bool = false,
 
+/// Enable or disable GTK's OpenGL debugging logs. The default is `true` for
+/// debug builds, `false` for all others.
+@"gtk-opengl-debug": bool = builtin.mode == .Debug,
+
+/// After GTK 4.14.0, we need to force the GSK renderer to OpenGL as the default
+/// GSK renderer is broken on some systems. If you would like to override
+/// that bekavior, set `gtk-gsk-renderer=default` and either use your system's
+/// default GSK renderer, or set the GSK_RENDERER environment variable to your
+/// renderer of choice before launching Ghostty. This setting has no effect when
+/// using versions of GTK earlier than 4.14.0.
+@"gtk-gsk-renderer": GtkGskRenderer = .opengl,
+
 /// If `true`, the Ghostty GTK application will run in single-instance mode:
 /// each new `ghostty` process launched will result in a new window if there is
 /// already a running process.
@@ -1991,6 +2057,10 @@ keybind: Keybinds = .{},
 /// `toggle_tab_overview` action in a keybind if your window doesn't have a
 /// title bar, or you can switch tabs with keybinds.
 @"gtk-tabs-location": GtkTabsLocation = .top,
+
+/// If this is `true`, the titlebar will be hidden when the window is maximized,
+/// and shown when the titlebar is unmaximized. GTK only.
+@"gtk-titlebar-hide-when-maximized": bool = false,
 
 /// Determines the appearance of the top and bottom bars when using the
 /// Adwaita tab bar. This requires `gtk-adwaita` to be enabled (it is
@@ -2377,6 +2447,11 @@ pub fn default(alloc_gpa: Allocator) Allocator.Error!Config {
         );
         try result.keybind.set.put(
             alloc,
+            .{ .key = .{ .translated = .w }, .mods = .{ .ctrl = true, .shift = true } },
+            .{ .close_tab = {} },
+        );
+        try result.keybind.set.put(
+            alloc,
             .{ .key = .{ .translated = .left }, .mods = .{ .ctrl = true, .shift = true } },
             .{ .previous_tab = {} },
         );
@@ -2642,6 +2717,11 @@ pub fn default(alloc_gpa: Allocator) Allocator.Error!Config {
         );
         try result.keybind.set.put(
             alloc,
+            .{ .key = .{ .translated = .w }, .mods = .{ .super = true, .alt = true } },
+            .{ .close_tab = {} },
+        );
+        try result.keybind.set.put(
+            alloc,
             .{ .key = .{ .translated = .w }, .mods = .{ .super = true, .shift = true } },
             .{ .close_window = {} },
         );
@@ -2757,6 +2837,13 @@ pub fn default(alloc_gpa: Allocator) Allocator.Error!Config {
             .{ .toggle_fullscreen = {} },
         );
 
+        // Selection clipboard paste, matches Terminal.app
+        try result.keybind.set.put(
+            alloc,
+            .{ .key = .{ .translated = .v }, .mods = .{ .super = true, .shift = true } },
+            .{ .paste_from_selection = {} },
+        );
+
         // "Natural text editing" keybinds. This forces these keys to go back
         // to legacy encoding (not fixterms). It seems macOS users more than
         // others are used to these keys so we set them as defaults. If
@@ -2775,7 +2862,7 @@ pub fn default(alloc_gpa: Allocator) Allocator.Error!Config {
         try result.keybind.set.put(
             alloc,
             .{ .key = .{ .translated = .backspace }, .mods = .{ .super = true } },
-            .{ .esc = "\x15" },
+            .{ .text = "\\x15" },
         );
         try result.keybind.set.put(
             alloc,
@@ -3976,6 +4063,11 @@ pub const WindowPaddingColor = enum {
     background,
     extend,
     @"extend-always",
+};
+
+pub const WindowSubtitle = enum {
+    false,
+    @"working-directory",
 };
 
 /// Color represents a color using RGB.
@@ -5685,10 +5777,30 @@ pub const QuickTerminalScreen = enum {
     @"macos-menu-bar",
 };
 
+// See quick-terminal-space-behavior
+pub const QuickTerminalSpaceBehavior = enum {
+    remain,
+    move,
+};
+
 /// See grapheme-width-method
 pub const GraphemeWidthMethod = enum {
     legacy,
     unicode,
+};
+
+/// See text-blending
+pub const TextBlending = enum {
+    native,
+    linear,
+    @"linear-corrected",
+
+    pub fn isLinear(self: TextBlending) bool {
+        return switch (self) {
+            .native => false,
+            .linear, .@"linear-corrected" => true,
+        };
+    }
 };
 
 /// See freetype-load-flag
@@ -5737,6 +5849,14 @@ pub const BackgroundBlur = union(enum) {
                 input_,
                 0,
             ) catch return error.InvalidValue };
+    }
+
+    pub fn enabled(self: BackgroundBlur) bool {
+        return switch (self) {
+            .false => false,
+            .true => true,
+            .radius => |v| v > 0,
+        };
     }
 
     pub fn cval(self: BackgroundBlur) u8 {
@@ -6107,6 +6227,12 @@ pub const WindowPadding = struct {
         try testing.expectError(error.InvalidValue, WindowPadding.parseCLI(""));
         try testing.expectError(error.InvalidValue, WindowPadding.parseCLI("a"));
     }
+};
+
+/// See the `gtk-gsk-renderer` config.
+pub const GtkGskRenderer = enum {
+    default,
+    opengl,
 };
 
 test "parse duration" {

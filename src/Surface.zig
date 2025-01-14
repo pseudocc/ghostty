@@ -571,12 +571,16 @@ pub fn init(
 
     // Set a minimum size that is cols=10 h=4. This matches Mac's Terminal.app
     // but is otherwise somewhat arbitrary.
+
+    const min_window_width_cells: u32 = 10;
+    const min_window_height_cells: u32 = 4;
+
     try rt_app.performAction(
         .{ .surface = self },
         .size_limit,
         .{
-            .min_width = size.cell.width * 10,
-            .min_height = size.cell.height * 4,
+            .min_width = size.cell.width * min_window_width_cells,
+            .min_height = size.cell.height * min_window_height_cells,
             // No max:
             .max_width = 0,
             .max_height = 0,
@@ -619,8 +623,8 @@ pub fn init(
     // start messing with the window.
     if (config.@"window-height" > 0 and config.@"window-width" > 0) init: {
         const scale = rt_surface.getContentScale() catch break :init;
-        const height = @max(config.@"window-height" * cell_size.height, 480);
-        const width = @max(config.@"window-width" * cell_size.width, 640);
+        const height = @max(config.@"window-height", min_window_height_cells) * cell_size.height;
+        const width = @max(config.@"window-width", min_window_width_cells) * cell_size.width;
         const width_f32: f32 = @floatFromInt(width);
         const height_f32: f32 = @floatFromInt(height);
 
@@ -1314,8 +1318,8 @@ pub fn imePoint(self: *const Surface) apprt.IMEPos {
     const content_scale = self.rt_surface.getContentScale() catch .{ .x = 1, .y = 1 };
 
     const x: f64 = x: {
-        // Simple x * cell width gives the top-left corner
-        var x: f64 = @floatFromInt(cursor.x * self.size.cell.width);
+        // Simple x * cell width gives the top-left corner, then add padding offset
+        var x: f64 = @floatFromInt(cursor.x * self.size.cell.width + self.size.padding.left);
 
         // We want the midpoint
         x += @as(f64, @floatFromInt(self.size.cell.width)) / 2;
@@ -1327,8 +1331,8 @@ pub fn imePoint(self: *const Surface) apprt.IMEPos {
     };
 
     const y: f64 = y: {
-        // Simple x * cell width gives the top-left corner
-        var y: f64 = @floatFromInt(cursor.y * self.size.cell.height);
+        // Simple y * cell height gives the top-left corner, then add padding offset
+        var y: f64 = @floatFromInt(cursor.y * self.size.cell.height + self.size.padding.top);
 
         // We want the bottom
         y += @floatFromInt(self.size.cell.height);
@@ -1588,6 +1592,15 @@ pub fn preeditCallback(self: *Surface, preedit_: ?[]const u8) !void {
 
     self.renderer_state.mutex.lock();
     defer self.renderer_state.mutex.unlock();
+
+    // We clear our selection when ANY OF:
+    // 1. We have an existing preedit
+    // 2. We have preedit text
+    if (self.renderer_state.preedit != null or
+        preedit_ != null)
+    {
+        self.setSelection(null) catch {};
+    }
 
     // We always clear our prior preedit
     if (self.renderer_state.preedit) |p| {
@@ -3934,6 +3947,33 @@ pub fn performBindingAction(self: *Surface, action: input.Binding.Action) !bool 
             return false;
         },
 
+        .copy_url_to_clipboard => {
+            // If the mouse isn't over a link, nothing we can do.
+            if (!self.mouse.over_link) return false;
+
+            const pos = try self.rt_surface.getCursorPos();
+            if (try self.linkAtPos(pos)) |link_info| {
+                // Get the URL text from selection
+                const url_text = (self.io.terminal.screen.selectionString(self.alloc, .{
+                    .sel = link_info[1],
+                    .trim = self.config.clipboard_trim_trailing_spaces,
+                })) catch |err| {
+                    log.err("error reading url string err={}", .{err});
+                    return false;
+                };
+                defer self.alloc.free(url_text);
+
+                self.rt_surface.setClipboardString(url_text, .standard, false) catch |err| {
+                    log.err("error copying url to clipboard err={}", .{err});
+                    return true;
+                };
+
+                return true;
+            }
+
+            return false;
+        },
+
         .paste_from_clipboard => try self.startClipboardRequest(
             .standard,
             .{ .paste = {} },
@@ -4059,6 +4099,12 @@ pub fn performBindingAction(self: *Surface, action: input.Binding.Action) !bool 
             {},
         ),
 
+        .close_tab => try self.rt_app.performAction(
+            .{ .surface = self },
+            .close_tab,
+            {},
+        ),
+
         inline .previous_tab,
         .next_tab,
         .last_tab,
@@ -4130,6 +4176,12 @@ pub fn performBindingAction(self: *Surface, action: input.Binding.Action) !bool 
         .toggle_split_zoom => try self.rt_app.performAction(
             .{ .surface = self },
             .toggle_split_zoom,
+            {},
+        ),
+
+        .toggle_maximize => try self.rt_app.performAction(
+            .{ .surface = self },
+            .toggle_maximize,
             {},
         ),
 
@@ -4258,6 +4310,7 @@ fn closingAction(action: input.Binding.Action) bool {
     return switch (action) {
         .close_surface,
         .close_window,
+        .close_tab,
         => true,
 
         else => false,

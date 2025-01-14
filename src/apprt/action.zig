@@ -82,12 +82,18 @@ pub const Action = union(Key) {
     /// the tab should be opened in a new window.
     new_tab,
 
+    /// Closes the tab belonging to the currently focused split.
+    close_tab,
+
     /// Create a new split. The value determines the location of the split
     /// relative to the target.
     new_split: SplitDirection,
 
     /// Close all open windows.
     close_all_windows,
+
+    /// Toggle maximized window state.
+    toggle_maximize,
 
     /// Toggle fullscreen mode.
     toggle_fullscreen: Fullscreen,
@@ -225,8 +231,10 @@ pub const Action = union(Key) {
         quit,
         new_window,
         new_tab,
+        close_tab,
         new_split,
         close_all_windows,
+        toggle_maximize,
         toggle_fullscreen,
         toggle_tab_overview,
         toggle_window_decorations,

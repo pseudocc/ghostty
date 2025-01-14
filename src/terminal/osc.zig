@@ -178,6 +178,9 @@ pub const Command = union(enum) {
         progress: ?u8 = null,
     },
 
+    /// Wait input (OSC 9;5)
+    wait_input: void,
+
     pub const ColorKind = union(enum) {
         palette: u8,
         foreground,
@@ -274,6 +277,7 @@ pub const Parser = struct {
     pub const State = enum {
         empty,
         invalid,
+        swallow,
 
         // Command prefixes. We could just accumulate and compare (mem.eql)
         // but the state space is small enough that we just build it up this way.
@@ -450,6 +454,8 @@ pub const Parser = struct {
                 '9' => self.state = .@"9",
                 else => self.state = .invalid,
             },
+
+            .swallow => {},
 
             .@"0" => switch (c) {
                 ';' => {
@@ -808,6 +814,11 @@ pub const Parser = struct {
                 '4' => {
                     self.state = .conemu_progress_prestate;
                 },
+                '5' => {
+                    self.state = .swallow;
+                    self.command = .{ .wait_input = {} };
+                    self.complete = true;
+                },
 
                 // Todo: parse out other ConEmu operating system commands.
                 // Even if we don't support them we probably don't want
@@ -822,7 +833,7 @@ pub const Parser = struct {
                     self.buf_start = self.buf_idx;
                     self.complete = true;
                     self.state = .conemu_sleep_value;
-                    },
+                },
                 else => self.state = .invalid,
             },
 
@@ -871,7 +882,7 @@ pub const Parser = struct {
             .conemu_progress_state => switch (c) {
                 '0' => {
                     self.command.progress.state = .remove;
-                    self.state = .conemu_progress_prevalue;
+                    self.state = .swallow;
                     self.complete = true;
                 },
                 '1' => {
@@ -887,7 +898,7 @@ pub const Parser = struct {
                 '3' => {
                     self.command.progress.state = .indeterminate;
                     self.complete = true;
-                    self.state = .conemu_progress_prevalue;
+                    self.state = .swallow;
                 },
                 '4' => {
                     self.command.progress.state = .pause;
@@ -934,7 +945,10 @@ pub const Parser = struct {
                     }
                 },
 
-                else => self.showDesktopNotification(),
+                else => {
+                    self.state = .swallow;
+                    self.complete = true;
+                },
             },
 
             .query_fg_color => switch (c) {
@@ -1965,18 +1979,18 @@ test "OSC: OSC9 progress set double digit" {
     try testing.expect(cmd.progress.progress == 94);
 }
 
-test "OSC: OSC9 progress set extra semicolon triggers desktop notification" {
+test "OSC: OSC9 progress set extra semicolon ignored" {
     const testing = std.testing;
 
     var p: Parser = .{};
 
-    const input = "9;4;1;100;";
+    const input = "9;4;1;100";
     for (input) |ch| p.next(ch);
 
     const cmd = p.end('\x1b').?;
-    try testing.expect(cmd == .show_desktop_notification);
-    try testing.expectEqualStrings(cmd.show_desktop_notification.title, "");
-    try testing.expectEqualStrings(cmd.show_desktop_notification.body, "4;1;100;");
+    try testing.expect(cmd == .progress);
+    try testing.expect(cmd.progress.state == .set);
+    try testing.expect(cmd.progress.progress == 100);
 }
 
 test "OSC: OSC9 progress remove with no progress" {
@@ -1985,6 +1999,20 @@ test "OSC: OSC9 progress remove with no progress" {
     var p: Parser = .{};
 
     const input = "9;4;0;";
+    for (input) |ch| p.next(ch);
+
+    const cmd = p.end('\x1b').?;
+    try testing.expect(cmd == .progress);
+    try testing.expect(cmd.progress.state == .remove);
+    try testing.expect(cmd.progress.progress == null);
+}
+
+test "OSC: OSC9 progress remove with double semicolon" {
+    const testing = std.testing;
+
+    var p: Parser = .{};
+
+    const input = "9;4;0;;";
     for (input) |ch| p.next(ch);
 
     const cmd = p.end('\x1b').?;
@@ -2016,9 +2044,8 @@ test "OSC: OSC9 progress remove extra semicolon" {
     for (input) |ch| p.next(ch);
 
     const cmd = p.end('\x1b').?;
-    try testing.expect(cmd == .show_desktop_notification);
-    try testing.expectEqualStrings(cmd.show_desktop_notification.title, "");
-    try testing.expectEqualStrings(cmd.show_desktop_notification.body, "4;0;100;");
+    try testing.expect(cmd == .progress);
+    try testing.expect(cmd.progress.state == .remove);
 }
 
 test "OSC: OSC9 progress error" {
@@ -2075,6 +2102,30 @@ test "OSC: OSC9 progress pause with progress" {
     try testing.expect(cmd == .progress);
     try testing.expect(cmd.progress.state == .pause);
     try testing.expect(cmd.progress.progress == 100);
+}
+
+test "OSC: OSC9 conemu wait input" {
+    const testing = std.testing;
+
+    var p: Parser = .{};
+
+    const input = "9;5";
+    for (input) |ch| p.next(ch);
+
+    const cmd = p.end('\x1b').?;
+    try testing.expect(cmd == .wait_input);
+}
+
+test "OSC: OSC9 conemu wait ignores trailing characters" {
+    const testing = std.testing;
+
+    var p: Parser = .{};
+
+    const input = "9;5;foo";
+    for (input) |ch| p.next(ch);
+
+    const cmd = p.end('\x1b').?;
+    try testing.expect(cmd == .wait_input);
 }
 
 test "OSC: empty param" {
